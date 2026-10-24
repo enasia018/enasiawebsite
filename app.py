@@ -14,11 +14,22 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-app.secret_key = "enasia_secret_key"
+app.secret_key = os.environ.get("SECRET_KEY", "enasia_secret_key")
 
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///reservations.db"
+database_url = os.environ.get("DATABASE_URL")
+
+if database_url and database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///reservations.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
 db = SQLAlchemy(app)
+
+
+
+
+
 
 UPLOAD_FOLDER = "static/uploads"
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
