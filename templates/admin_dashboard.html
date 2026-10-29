@@ -84,11 +84,17 @@
             border: none;
         }
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
 </head>
-<body>
+<body class="admin-page">
 
     <a href="{{ url_for('admin_logout') }}" class="btn-logout">Logout</a>
     <h2>Admin Dashboard</h2>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="admin-notice admin-notice-{{ category }}" role="status">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
 
     <!-- Form to add a new Van -->
     <div class="form-box">
@@ -107,7 +113,7 @@
         <form action="{{ url_for('add_rate') }}" method="POST">
             <input type="text" name="pickup_location" placeholder="Pick-up Location" required><br>
             <input type="text" name="destination" placeholder="Destination Name" required><br>
-            <input type="text" name="rate_per_day" placeholder="Rate per Day (₱)" required><br>
+            <input type="text" name="rate_per_day" placeholder="Base rate (2 days, ₱)" required><br>
             <button type="submit" class="btn-add">Add Rate</button>
         </form>
     </div>
@@ -129,6 +135,7 @@
             <tr>
                 <th>ID</th>
                 <th>Van Details & Update</th>
+                <th>Availability</th>
                 <th>Status</th>
                 <th>Action</th>
             </tr>
@@ -146,7 +153,48 @@
                     </form>
                 </td>
                 <td>
-                    {% if van.status == 'Available' %}
+                    {% set van_reservations = reservations | selectattr('vans', 'equalto', van.name) | list %}
+                    {% if van_reservations %}
+                        <div class="van-booking-list">
+                            {% for booking in van_reservations %}
+                                <div class="van-booking">
+                                    <strong>{{ booking.name }}</strong>
+                                    <span>{{ booking.pickup_date or 'Date not set' }} · {{ booking.pickup_time or 'Time not set' }}</span>
+                                    <small>{{ booking.status }}</small>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <span class="van-no-bookings">No linked reservations</span>
+                    {% endif %}
+
+                    <form action="{{ url_for('delete_van_reservations', van_id=van.id) }}" method="POST" style="margin: 10px 0;">
+                        <button type="submit" class="btn-delete" style="border: none; cursor: pointer;" onclick="return confirm('Permanently delete ALL reservations for this van? This cannot be undone.');">
+                            Delete All Reservations for This Van
+                        </button>
+                    </form>
+
+                    <form action="{{ url_for('update_van_schedule', van_id=van.id) }}" method="POST" class="van-schedule-form">
+                        <strong>Manual schedule / note</strong>
+                        <div class="van-schedule-fields">
+                            <label>
+                                Date
+                                <input type="date" name="schedule_date" value="{{ van.schedule_date or '' }}">
+                            </label>
+                            <label>
+                                Time
+                                <input type="time" name="schedule_time" value="{{ van.schedule_time or '' }}">
+                            </label>
+                        </div>
+                        <label>
+                            Note
+                            <textarea name="schedule_note" maxlength="500" rows="2" placeholder="Add a manual schedule note">{{ van.schedule_note or '' }}</textarea>
+                        </label>
+                        <button type="submit" class="btn-add">Save Van Schedule</button>
+                    </form>
+                </td>
+                <td>
+                    {% if van_statuses[van.id] == 'Available' %}
                         <span style="color: #4CAF50; font-weight: bold;">Available</span>
                     {% else %}
                         <span style="color: #ff4d4d; font-weight: bold;">Not Available</span>
@@ -177,7 +225,7 @@
                     <form action="{{ url_for('edit_rate', rate_id=rate.id) }}" method="POST" style="display:inline;">
                         <input type="text" name="pickup_location" value="{{ rate.pickup_location }}" placeholder="Pick-up" required style="background:#333; color:#fff; border:1px solid #555; width: 160px;">
                         <input type="text" name="destination" value="{{ rate.destination }}" placeholder="Destination" required style="background:#333; color:#fff; border:1px solid #555; width: 160px;">
-                        <input type="text" name="rate_per_day" value="{{ rate.rate_per_day }}" placeholder="Rate (₱)" required style="background:#333; color:#fff; border:1px solid #555; width: 100px;">
+                        <input type="text" name="rate_per_day" value="{{ '{:,.0f}'.format(rate.rate_per_day) if rate.rate_per_day == (rate.rate_per_day|int) else '{:,.2f}'.format(rate.rate_per_day) }}" placeholder="2-day base rate (₱)" required style="background:#333; color:#fff; border:1px solid #555; width: 100px;">
                         <button type="submit" style="background:#007bff; color:white; border:none; padding:5px 8px; border-radius:3px; cursor:pointer;">Update Rate</button>
                     </form>
                 </td>
@@ -348,6 +396,8 @@
                 <th>Name</th>
                 <th>Contact</th>
                 <th>Rented Van</th>
+                <th>Destination</th>
+                <th>Pickup Schedule</th>
                 <th>Status</th>
                 <th>Receipt</th>
                 <th>Action</th>
@@ -360,6 +410,20 @@
                 <td>{{ r.name }}</td>
                 <td>{{ r.contact }}</td>
                 <td>{{ r.vans }}</td>
+                <td>{{ r.destination or 'Not provided' }}</td>
+                <td>
+                    <form action="{{ url_for('update_reservation_schedule', res_id=r.id) }}" method="POST" class="schedule-form">
+                        <label>
+                            Date
+                            <input type="date" name="pickup_date" value="{{ r.pickup_date or '' }}" required>
+                        </label>
+                        <label>
+                            Time
+                            <input type="time" name="pickup_time" value="{{ r.pickup_time or '' }}" required>
+                        </label>
+                        <button type="submit" class="btn-add">Save Schedule</button>
+                    </form>
+                </td>
                 <td>{{ r.status }}</td>
                 <td>
                     {% if r.receipt %}
@@ -374,6 +438,11 @@
                     {% else %}
                         Approved
                     {% endif %}
+                    <form action="{{ url_for('delete_reservation', res_id=r.id) }}" method="POST" style="margin-top: 8px;">
+                        <button type="submit" class="btn-delete" style="border: none; cursor: pointer;" onclick="return confirm('Permanently delete this reservation for {{ r.name | e }}? This cannot be undone.');">
+                            Delete This Reservation
+                        </button>
+                    </form>
                 </td>
             </tr>
             {% endfor %}

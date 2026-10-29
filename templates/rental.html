@@ -76,8 +76,9 @@
             background-color: #777;
         }
     </style>
-</head>
-<body>
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css', v=5) }}">
+    </head>
+    <body class="rental-page">
 
     <h2>Book Your Van Rental</h2>
 
@@ -96,30 +97,54 @@
         <input type="text" name="contact" required>
 
         <label>Select Van:</label>
-        <select name="vans" required>
+        <select name="vans" id="vanSelect" required>
             {% for van in vans_list %}
-                <option value="{{ van.name }}">{{ van.name }} (Plate: {{ van.plate_number }})</option>
+                <option value="{{ van.name }}" data-bookings='{{ schedules_by_van.get(van.name, []) | tojson | forceescape }}'>{{ van.name }} (Plate: {{ van.plate_number }})</option>
             {% endfor %}
         </select>
+        <div id="vanBookingSchedule" class="van-booking-schedule" aria-live="polite"></div>
+        <p id="vanAvailabilityMessage" class="van-availability-message" role="alert" hidden></p>
 
-        <label>Destination & Rate:</label>
-        <select name="destination" id="destination" required onchange="calculateQuote()">
+        {% if reservation_error %}
+            <p class="van-availability-message" role="alert">{{ reservation_error }}</p>
+        {% endif %}
+
+        <label>Destination & Base Rate (first 2 days):</label>
+        <select name="destination" id="destination" required>
             <option value="" data-rate="0">-- Select Destination --</option>
             {% for rate in rates %}
                 <option value="{{ rate.destination }}" data-rate="{{ rate.rate_per_day }}">
-                    {{ rate.destination }} - ₱{{ rate.rate_per_day }} per day
+                    {{ rate.destination }} -
+                    {% if rate.rate_per_day == (rate.rate_per_day|int) %}
+                        ₱{{ '{:,.0f}'.format(rate.rate_per_day) }}
+                    {% else %}
+                        ₱{{ '{:,.2f}'.format(rate.rate_per_day) }}
+                    {% endif %}
+                    for first 2 days
                 </option>
             {% endfor %}
+            <option value="__other__" data-rate="0">Destination is not in the list</option>
         </select>
 
-        <label>Number of Days:</label>
-        <input type="number" name="days" id="days" value="1" min="1" required oninput="calculateQuote()">
+        <div id="otherDestinationGroup" hidden>
+            <label for="otherDestination">Enter Your Destination:</label>
+            <input type="text" name="other_destination" id="otherDestination" maxlength="200" placeholder="Type your destination">
+        </div>
 
-        <label>Number of Nights:</label>
-        <input type="text" name="nights">
+        <label>Number of Days (minimum 2):</label>
+        <input type="number" name="days" id="days" value="2" min="2" required oninput="calculateQuote(); validateVanAvailability()">
 
-        <label>Pickup Location:</label>
-        <input type="text" name="pickup" required>
+        <label>Pickup Date:</label>
+        <input type="date" name="pickup_date" id="pickupDate" required>
+
+        <label>Pickup Time:</label>
+        <input type="time" name="pickup_time" required>
+
+        <label>Number of Nights (minimum 1):</label>
+        <input type="number" name="nights" min="1" value="1" required>
+
+        <label for="pickupLocation">Pickup Location (type your pickup place):</label>
+        <input type="text" name="pickup" id="pickupLocation" required>
 
         <label>Drop-off Location:</label>
         <input type="text" name="dropoff" required>
@@ -127,11 +152,19 @@
         <label>Upload Payment Receipt (GCash):</label>
         <input type="file" name="receipt">
 
-        <button type="submit">Submit Reservation</button>
+        <button type="submit" id="reservationSubmit">Submit Reservation</button>
     </form>
 
     <div class="quote-box">
-        <h3>Estimated Quote: <span id="totalQuote" style="color: #4CAF50;">₱0.00</span></h3>
+        <h3 id="estimatedQuote">Estimated Quote: <span id="totalQuote" style="color: #4CAF50;">₱0.00</span></h3>
+        <p class="discount-quote">The destination rate covers the first 2 days. Each additional day adds ₱3,000.</p>
+        <p id="customDestinationQuote" class="discount-quote" hidden>We’ll contact you at the cellphone number you provide after you submit your reservation.</p>
+    </div>
+
+    <div class="quote-box">
+        <h3>Need a 1-day van rental or a day tour?</h3>
+        <p>Please send us a message and include your contact number. Wait for our admin to contact you.</p>
+        <a class="btn-home" href="https://m.me/enasiadz8" target="_blank" rel="noopener noreferrer">Send a Message</a>
     </div>
 
     <div style="text-align: center;">
@@ -139,16 +172,120 @@
     </div>
 
     <script>
+        function addDaysToDate(dateString, days) {
+            const [year, month, day] = dateString.split('-').map(Number);
+            const date = new Date(Date.UTC(year, month - 1, day + days));
+            return date.toISOString().slice(0, 10);
+        }
+
+        function updateVanBookingSchedule() {
+            const vanSelect = document.getElementById('vanSelect');
+            const selectedOption = vanSelect.options[vanSelect.selectedIndex];
+            const schedule = document.getElementById('vanBookingSchedule');
+            schedule.replaceChildren();
+
+            if (!selectedOption) {
+                return;
+            }
+
+            const bookings = JSON.parse(selectedOption.dataset.bookings || '[]');
+            if (bookings.length === 0) {
+                return;
+            }
+
+            const heading = document.createElement('strong');
+            heading.textContent = 'Already reserved:';
+            const list = document.createElement('ul');
+            bookings.forEach(booking => {
+                const item = document.createElement('li');
+                const lastBookedDay = addDaysToDate(booking.end, -1);
+                item.textContent = `${booking.start} to ${lastBookedDay}${booking.time ? ` at ${booking.time}` : ''} — not available on these dates`;
+                list.appendChild(item);
+            });
+            schedule.append(heading, list);
+        }
+
+        function validateVanAvailability() {
+            const vanSelect = document.getElementById('vanSelect');
+            const selectedOption = vanSelect.options[vanSelect.selectedIndex];
+            const pickupDate = document.getElementById('pickupDate').value;
+            const days = Number.parseInt(document.getElementById('days').value, 10);
+            const message = document.getElementById('vanAvailabilityMessage');
+            const submitButton = document.getElementById('reservationSubmit');
+
+            message.hidden = true;
+            submitButton.disabled = false;
+            if (!selectedOption || !pickupDate || !Number.isInteger(days) || days < 2) {
+                return true;
+            }
+
+            const requestedEnd = addDaysToDate(pickupDate, days);
+            const bookings = JSON.parse(selectedOption.dataset.bookings || '[]');
+            const hasConflict = bookings.some(booking =>
+                pickupDate < booking.end && booking.start < requestedEnd
+            );
+
+            if (hasConflict) {
+                message.textContent = 'Sorry, this van is already reserved for one or more of your selected dates. Please choose another van or date range.';
+                message.hidden = false;
+                submitButton.disabled = true;
+                return false;
+            }
+            return true;
+        }
+
+        function handleDestinationChange() {
+            const isCustomDestination = document.getElementById('destination').value === '__other__';
+            const otherDestinationGroup = document.getElementById('otherDestinationGroup');
+            const otherDestination = document.getElementById('otherDestination');
+
+            otherDestinationGroup.hidden = !isCustomDestination;
+            otherDestination.required = isCustomDestination;
+            calculateQuote();
+        }
+
         function calculateQuote() {
             const destinationSelect = document.getElementById('destination');
             const selectedOption = destinationSelect.options[destinationSelect.selectedIndex];
-            const ratePerDay = parseFloat(selectedOption.getAttribute('data-rate')) || 0;
-            
+            const baseRate = parseFloat(selectedOption.getAttribute('data-rate')) || 0;
             const days = parseInt(document.getElementById('days').value) || 0;
-            const total = ratePerDay * days;
+            const estimatedQuote = document.getElementById('estimatedQuote');
+            const customDestinationQuote = document.getElementById('customDestinationQuote');
 
-            document.getElementById('totalQuote').innerText = '₱' + total.toLocaleString();
+            if (destinationSelect.value === '__other__') {
+                estimatedQuote.hidden = true;
+                customDestinationQuote.hidden = false;
+                return;
+            }
+
+            customDestinationQuote.hidden = true;
+            if (days < 2) {
+                estimatedQuote.hidden = true;
+                return;
+            }
+
+            estimatedQuote.hidden = false;
+            const total = baseRate + Math.max(days - 2, 0) * 3000;
+
+            document.getElementById('totalQuote').innerText = '₱' + total.toLocaleString('en-PH', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
         }
+
+        document.getElementById('destination').addEventListener('change', handleDestinationChange);
+        document.getElementById('vanSelect').addEventListener('change', () => {
+            updateVanBookingSchedule();
+            validateVanAvailability();
+        });
+        document.getElementById('pickupDate').addEventListener('input', validateVanAvailability);
+        document.querySelector('form').addEventListener('submit', event => {
+            if (!validateVanAvailability()) {
+                event.preventDefault();
+            }
+        });
+        updateVanBookingSchedule();
+        calculateQuote();
     </script>
 
 </body>
